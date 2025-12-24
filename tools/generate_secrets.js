@@ -1,7 +1,11 @@
 #!/usr/bin/env node
-const fs = require('fs');
-const crypto = require('crypto');
-const path = require('path');
+import fs from 'fs';
+import crypto from 'crypto';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 function gen(len = 32) {
   return crypto.randomBytes(len).toString('base64').replace(/\+/g,'A').replace(/\//g,'B').replace(/=+$/,'');
