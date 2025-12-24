@@ -1,0 +1,16 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "types": ["vite/client", "node"],
+    "resolveJsonModule": true,
+    "allowJs": true,
+    "lib": ["ES2022", "DOM"]
+  },
+  "include": ["src", "vite.config.ts", "env.d.ts", "vite-env.d.ts"],
+  "exclude": ["node_modules", "dist"]
+}
