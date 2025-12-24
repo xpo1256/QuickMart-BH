@@ -230,6 +230,17 @@ app.get('/api/auth/me', async (req, res) => {
 
 // --- 7. START SERVER ---
 const PORT = process.env.PORT || 5000;
+// If a built frontend exists, serve it (single-service deployment)
+const distPath = path.join(process.cwd(), 'dist');
+if (fs.existsSync(distPath)) {
+    app.use(express.static(distPath));
+    app.get('*', (req, res) => {
+        // Only send index.html for non-API GET requests
+        if (req.method !== 'GET' || req.path.startsWith('/api')) return res.status(404).end();
+        res.sendFile(path.join(distPath, 'index.html'));
+    });
+}
+
 app.listen(PORT, () => {
     connectDB();
     console.log(`🚀 Server live on port ${PORT}`);
