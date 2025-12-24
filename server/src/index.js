@@ -20,6 +20,15 @@ import jwt from 'jsonwebtoken';
 
 const app = express();
 
+// Normalize FRONTEND_URL (strip trailing /api if accidentally set)
+if (process.env.FRONTEND_URL) {
+    const stripped = String(process.env.FRONTEND_URL).replace(/\/api\/?$/, '');
+    if (stripped !== process.env.FRONTEND_URL) {
+        console.warn('NOTICE: FRONTEND_URL had a trailing /api — stripping it for safety.');
+        process.env.FRONTEND_URL = stripped;
+    }
+}
+
 // --- 1. ENV VAR HANDLING ---
 const JWT_SECRET = process.env.JWT_SECRET || 'fallback_secret';
 const ADMIN_API_KEY = process.env.ADMIN_API_KEY;
