@@ -16,12 +16,12 @@ export default defineConfig({
       '@': path.resolve(__dirname, './src'),
     },
   },
-  server: {
+ server: {
     port: 5173,
     proxy: {
-      // Proxy API calls to backend running on 5001
       '/api': {
-        target: 'http://localhost:5000',
+        // Use the live URL if it exists, otherwise localhost
+        target: process.env.VITE_API_URL || 'http://localhost:5000',
         changeOrigin: true,
         secure: false,
       },
