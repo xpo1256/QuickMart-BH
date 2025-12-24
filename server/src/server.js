@@ -12,21 +12,24 @@ import mongoose from 'mongoose';
 import { connectDB } from './config/database.js';
 import Product from './models/Product.js';
 import User from './models/User.js';
+// Note: Create a simple Category model if you haven't yet, or use a field in Product
+// import Category from './models/Category.js'; 
+
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 
 const app = express();
 
-// --- 1. CRITICAL ENV VAR HANDLING ---
-const JWT_SECRET = process.env.JWT_SECRET || 'fallback_secret_for_dev_only';
+// --- 1. ENV VAR HANDLING ---
+const JWT_SECRET = process.env.JWT_SECRET || 'fallback_secret';
 const ADMIN_API_KEY = process.env.ADMIN_API_KEY;
 
 if (process.env.NODE_ENV === 'production' && !ADMIN_API_KEY) {
-    console.error('FATAL: ADMIN_API_KEY missing in production.');
+    console.error('FATAL: ADMIN_API_KEY missing.');
     process.exit(1);
 }
 
-// --- 2. SECURITY (Fixed CSP for Fonts/Images) ---
+// --- 2. SECURITY & MIDDLEWARE ---
 app.use(helmet({
     contentSecurityPolicy: {
         directives: {
@@ -40,12 +43,10 @@ app.use(helmet({
     },
 }));
 
-if (process.env.NODE_ENV !== 'production') app.use(morgan('dev'));
-
-// --- 3. CORS & MIDDLEWARE ---
 const allowedOrigins = [
     process.env.FRONTEND_URL,
-    'http://localhost:5173'
+    'http://localhost:5173',
+    'http://localhost:3000'
 ].filter(Boolean).map(url => url.replace(/\/$/, ""));
 
 app.use(cors({
@@ -61,7 +62,7 @@ app.use(cors({
     allowedHeaders: ['Content-Type', 'Authorization', 'x-admin-key'],
 }));
 
-app.use(express.json({ limit: '100kb' }));
+app.use(express.json({ limit: '50mb' })); // Increased for image uploads
 app.use(cookieParser());
 app.use('/uploads', express.static(path.join(process.cwd(), 'uploads')));
 
@@ -71,12 +72,40 @@ app.use('/uploads', express.static(path.join(process.cwd(), 'uploads')));
     if (!fs.existsSync(fullPath)) fs.mkdirSync(fullPath, { recursive: true });
 });
 
-// --- 4. ROUTES ---
+// --- 3. MIDDLEWARE GUARDS ---
 
-// Fix "Cannot GET /" - Health Check
+const adminGuard = (req, res, next) => {
+    const session = req.cookies.admin_session;
+    if (session && session === ADMIN_API_KEY) {
+        return next();
+    }
+    res.status(403).json({ error: 'Admin access denied' });
+};
+
+// --- 4. PUBLIC ROUTES ---
+
 app.get('/', (req, res) => {
-    res.status(200).json({ status: 'Server is running', mode: process.env.NODE_ENV });
+    res.status(200).json({ status: 'QuickMart API Live', mode: process.env.NODE_ENV });
 });
+
+// Get all products
+app.get('/api/products', async (req, res) => {
+    try {
+        const products = await Product.find().sort({ createdAt: -1 });
+        res.json(products);
+    } catch (err) { res.status(500).json({ error: 'Database Error' }); }
+});
+
+// Get single product
+app.get('/api/products/:id', async (req, res) => {
+    try {
+        const product = await Product.findById(req.params.id);
+        if (!product) return res.status(404).json({ error: 'Not found' });
+        res.json(product);
+    } catch (err) { res.status(500).json({ error: 'Error fetching product' }); }
+});
+
+// --- 5. ADMIN ROUTES ---
 
 app.post('/api/admin/login', (req, res) => {
     const { key } = req.body;
@@ -84,19 +113,49 @@ app.post('/api/admin/login', (req, res) => {
     
     res.cookie('admin_session', key, {
         httpOnly: true,
-        secure: true,
+        secure: true, // Required for sameSite: 'none'
         sameSite: 'none',
-        maxAge: 24 * 60 * 60 * 1000
+        maxAge: 24 * 60 * 60 * 1000 // 24 hours
     });
     res.json({ success: true });
 });
 
-app.get('/api/products', async (req, res) => {
-    try {
-        const products = await Product.find().sort({ createdAt: -1 });
-        res.json(products);
-    } catch (err) { res.status(500).json({ error: 'DB Error' }); }
+app.get('/api/admin/check', (req, res) => {
+    const session = req.cookies.admin_session;
+    res.json({ ok: session === ADMIN_API_KEY });
 });
+
+app.post('/api/admin/logout', (req, res) => {
+    res.clearCookie('admin_session', { secure: true, sameSite: 'none' });
+    res.json({ success: true });
+});
+
+// Admin: Create Product
+app.post('/api/admin/products', adminGuard, async (req, res) => {
+    try {
+        const newProduct = new Product(req.body);
+        await newProduct.save();
+        res.status(201).json(newProduct);
+    } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+// Admin: Update Product
+app.put('/api/admin/products/:id', adminGuard, async (req, res) => {
+    try {
+        const updated = await Product.findByIdAndUpdate(req.params.id, req.body, { new: true });
+        res.json(updated);
+    } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+// Admin: Delete Product
+app.delete('/api/admin/products/:id', adminGuard, async (req, res) => {
+    try {
+        await Product.findByIdAndDelete(req.params.id);
+        res.json({ success: true });
+    } catch (err) { res.status(500).json({ error: 'Delete failed' }); }
+});
+
+// --- 6. AUTH ROUTES ---
 
 app.post('/api/auth/login', async (req, res) => {
     try {
@@ -105,20 +164,29 @@ app.post('/api/auth/login', async (req, res) => {
         if (!u || !(await bcrypt.compare(password, u.passwordHash))) {
             return res.status(401).json({ error: 'Invalid credentials' });
         }
-        const token = jwt.sign({ id: u._id, name: u.name, email: u.email }, JWT_SECRET, { expiresIn: '30d' });
+        const token = jwt.sign({ id: u._id, name: u.name }, JWT_SECRET, { expiresIn: '30d' });
         res.cookie('auth_token', token, {
             httpOnly: true,
             secure: true,
             sameSite: 'none',
             maxAge: 30 * 24 * 60 * 60 * 1000
         });
-        res.json({ success: true, user: { id: u._id, name: u.name } });
+        res.json({ success: true, user: { id: u._id, name: u.name, email: u.email } });
     } catch (err) { res.status(500).json({ error: 'Login failed' }); }
 });
 
-// --- 5. START SERVER ---
+app.get('/api/auth/me', async (req, res) => {
+    const token = req.cookies.auth_token;
+    if (!token) return res.status(401).json(null);
+    try {
+        const decoded = jwt.verify(token, JWT_SECRET);
+        res.json(decoded);
+    } catch (err) { res.status(401).json(null); }
+});
+
+// --- 7. START SERVER ---
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
     connectDB();
-    console.log(`Server live on port ${PORT}`);
+    console.log(`🚀 Server live on port ${PORT}`);
 });
