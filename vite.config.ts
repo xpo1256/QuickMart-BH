@@ -27,4 +27,9 @@ export default defineConfig({
       },
     },
   },
+  preview: {
+    // Allow Render's hostname so `vite preview` accepts the incoming host header
+    allowedHosts: ['quickmart-bh.onrender.com'],
+    host: true,
+  },
 })
