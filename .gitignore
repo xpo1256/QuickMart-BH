@@ -21,6 +21,7 @@ yarn-error.log*
 Thumbs.db
 
 # Uploaded media (do not commit)
+storage/
 uploads/
 
 # VSCode
