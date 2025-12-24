@@ -21,7 +21,7 @@ export default defineConfig({
     proxy: {
       '/api': {
         // Use the live URL if it exists, otherwise localhost
-        target: process.env.VITE_API_URL || 'http://localhost:5000',
+        target: process.env.VITE_API_URL || 'https://your-backend-api.onrender.com/api',
         changeOrigin: true,
         secure: false,
       },
