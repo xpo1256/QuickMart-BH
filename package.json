@@ -6,6 +6,7 @@
   "scripts": {
     "build": "vite build",
     "dev": "vite",
+    "preview": "vite preview",
     "dev:server": "npm --prefix server run dev",
     "start:server": "npm --prefix server run start"
   },
