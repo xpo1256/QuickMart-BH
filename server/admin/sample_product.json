@@ -1,0 +1,13 @@
+{
+  "name": "Sample QuickMart Item",
+  "nameAr": "عنصر تجريبي",
+  "description": "This is a sample product added by the admin script.",
+  "descriptionAr": "هذا منتج تجريبي أضيف بواسطة سكربت المسؤول.",
+  "price": 12.5,
+  "images": ["https://images.unsplash.com/photo-1602524810568-0b9b5f3a1f5f?auto=format&fit=crop&w=800&q=60"],
+  "category": "Electronics",
+  "categoryAr": "إلكترونيات",
+  "rating": 4.2,
+  "reviews": 5,
+  "stock": 120
+}

@@ -1,0 +1,20 @@
+[
+  {
+    "_id": "sample1",
+    "name": "Sample Product 1",
+    "description": "A demonstration product used when the database is not connected.",
+    "price": 4.500,
+    "currency": "BHD",
+    "images": ["/uploads/products/sample1.jpg"],
+    "createdAt": "2025-12-22T00:00:00.000Z"
+  },
+  {
+    "_id": "sample2",
+    "name": "Sample Product 2",
+    "description": "Another demo product to populate the storefront.",
+    "price": 7.250,
+    "currency": "BHD",
+    "images": ["/uploads/products/sample2.jpg"],
+    "createdAt": "2025-12-22T00:00:00.000Z"
+  }
+]

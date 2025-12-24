@@ -1,0 +1,5 @@
+This directory stores all customer orders as JSON files.
+
+Each order is automatically saved here when a customer completes checkout.
+
+Example order filename: ABC12345.json
