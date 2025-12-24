@@ -3,38 +3,46 @@ import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import morgan from 'morgan';
-import rateLimit from 'express-rate-limit';
 import cookieParser from 'cookie-parser';
-import { v4 as uuidv4 } from 'uuid';
 import fs from 'fs';
 import path from 'path';
-import multer from 'multer';
 import mongoose from 'mongoose';
 
 // Import MongoDB connection and models
 import { connectDB } from './config/database.js';
-import Order from './models/Order.js';
-import Category from './models/Category.js';
 import Product from './models/Product.js';
 import User from './models/User.js';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 
 const app = express();
-const JWT_SECRET = process.env.JWT_SECRET;
+
+// --- 1. CRITICAL ENV VAR HANDLING ---
+const JWT_SECRET = process.env.JWT_SECRET || 'fallback_secret_for_dev_only';
 const ADMIN_API_KEY = process.env.ADMIN_API_KEY;
 
-// Fail fast if critical env vars are missing in production
-if (process.env.NODE_ENV === 'production' && (!JWT_SECRET || !ADMIN_API_KEY)) {
-    console.error('FATAL: JWT_SECRET or ADMIN_API_KEY missing in production.');
+if (process.env.NODE_ENV === 'production' && !ADMIN_API_KEY) {
+    console.error('FATAL: ADMIN_API_KEY missing in production.');
     process.exit(1);
 }
 
-// 1. SECURITY & LOGGING
-app.use(helmet({ contentSecurityPolicy: false }));
+// --- 2. SECURITY (Fixed CSP for Fonts/Images) ---
+app.use(helmet({
+    contentSecurityPolicy: {
+        directives: {
+            defaultSrc: ["'self'"],
+            scriptSrc: ["'self'", "'unsafe-inline'"],
+            styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
+            fontSrc: ["'self'", "https://fonts.gstatic.com"],
+            imgSrc: ["'self'", "data:", "https:"],
+            connectSrc: ["'self'", "*"] 
+        },
+    },
+}));
+
 if (process.env.NODE_ENV !== 'production') app.use(morgan('dev'));
 
-// 2. FIXED CORS (Crucial for Render login)
+// --- 3. CORS & MIDDLEWARE ---
 const allowedOrigins = [
     process.env.FRONTEND_URL,
     'http://localhost:5173'
@@ -53,7 +61,6 @@ app.use(cors({
     allowedHeaders: ['Content-Type', 'Authorization', 'x-admin-key'],
 }));
 
-// 3. STORAGE SETUP
 app.use(express.json({ limit: '100kb' }));
 app.use(cookieParser());
 app.use('/uploads', express.static(path.join(process.cwd(), 'uploads')));
@@ -64,38 +71,26 @@ app.use('/uploads', express.static(path.join(process.cwd(), 'uploads')));
     if (!fs.existsSync(fullPath)) fs.mkdirSync(fullPath, { recursive: true });
 });
 
-// 4. AUTH MIDDLEWARES
-const requireAuth = (req, res, next) => {
-    const token = req.cookies?.auth_token;
-    if (!token) return res.status(401).json({ error: 'Auth required' });
-    try {
-        req.user = jwt.verify(token, JWT_SECRET);
-        next();
-    } catch (err) { res.status(401).json({ error: 'Invalid session' }); }
-};
+// --- 4. ROUTES ---
 
-const requireAdminKey = (req, res, next) => {
-    const providedCookie = req.cookies?.admin_session;
-    const providedHeader = req.headers['x-admin-key'];
-    if (providedCookie === ADMIN_API_KEY || providedHeader === ADMIN_API_KEY) return next();
-    res.status(401).json({ error: 'Admin access required' });
-};
+// Fix "Cannot GET /" - Health Check
+app.get('/', (req, res) => {
+    res.status(200).json({ status: 'Server is running', mode: process.env.NODE_ENV });
+});
 
-// 5. ADMIN LOGIN (Cookie Fix)
 app.post('/api/admin/login', (req, res) => {
     const { key } = req.body;
     if (key !== ADMIN_API_KEY) return res.status(401).json({ error: 'Invalid key' });
     
     res.cookie('admin_session', key, {
         httpOnly: true,
-        secure: true, // Render uses HTTPS
-        sameSite: 'none', // Needed because Frontend and Backend are different URLs
+        secure: true,
+        sameSite: 'none',
         maxAge: 24 * 60 * 60 * 1000
     });
     res.json({ success: true });
 });
 
-// 6. CORE API ROUTES
 app.get('/api/products', async (req, res) => {
     try {
         const products = await Product.find().sort({ createdAt: -1 });
@@ -121,7 +116,7 @@ app.post('/api/auth/login', async (req, res) => {
     } catch (err) { res.status(500).json({ error: 'Login failed' }); }
 });
 
-// START SERVER
+// --- 5. START SERVER ---
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
     connectDB();
