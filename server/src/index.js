@@ -7,6 +7,8 @@ import cookieParser from 'cookie-parser';
 import fs from 'fs';
 import path from 'path';
 import mongoose from 'mongoose';
+import multer from 'multer';
+import { uploadBufferToS3, saveBufferToLocal } from './services/storage.js';
 
 // Import MongoDB connection and models
 import { connectDB } from './config/database.js';
@@ -36,10 +38,19 @@ app.use(helmet({
             styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
             fontSrc: ["'self'", "https://fonts.gstatic.com"],
             imgSrc: ["'self'", "data:", "https:"],
-            connectSrc: ["'self'", "*"] 
+            connectSrc: ["'self'", "https:"]
         },
     },
 }));
+
+// Enforce HSTS in production
+if ((process.env.NODE_ENV || 'development') === 'production') {
+    app.use(helmet.hsts({
+        maxAge: 31536000,
+        includeSubDomains: true,
+        preload: true
+    }));
+}
 
 const allowedOrigins = [
     process.env.FRONTEND_URL,
@@ -49,6 +60,7 @@ const allowedOrigins = [
 
 app.use(cors({
     origin: (origin, callback) => {
+        // Allow non-browser requests (e.g., server-to-server) when origin is undefined
         if (!origin || allowedOrigins.includes(origin.replace(/\/$/, ""))) {
             callback(null, true);
         } else {
@@ -135,6 +147,31 @@ app.post('/api/admin/products', adminGuard, async (req, res) => {
         await newProduct.save();
         res.status(201).json(newProduct);
     } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+// Admin: Upload media (files in FormData under key 'files')
+const memoryUpload = multer({ storage: multer.memoryStorage() });
+app.post('/api/admin/products/upload', adminGuard, memoryUpload.array('files', 10), async (req, res) => {
+    try {
+        if (!req.files || req.files.length === 0) return res.status(400).json({ error: 'No files uploaded' });
+        const results = [];
+        for (const f of req.files) {
+            const filename = `${Date.now()}-${f.originalname.replace(/[^a-zA-Z0-9.\-_]/g, '')}`;
+            try {
+                if (process.env.S3_BUCKET) {
+                    const url = await uploadBufferToS3(f.buffer, `products/${filename}`, f.mimetype);
+                    results.push({ url });
+                } else {
+                    const url = saveBufferToLocal(f.buffer, filename, 'products');
+                    results.push({ url });
+                }
+            } catch (err) {
+                console.error('Upload error:', err);
+                return res.status(500).json({ error: 'Upload failed' });
+            }
+        }
+        res.json({ files: results });
+    } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // Admin: Update Product
