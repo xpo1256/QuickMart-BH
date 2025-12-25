@@ -14,13 +14,14 @@ import { uploadBufferToS3, saveBufferToLocal } from './services/storage.js';
 import { connectDB } from './config/database.js';
 import Product from './models/Product.js';
 import User from './models/User.js';
+import Order from './models/Order.js'; // ✅ new import
 
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 
 const app = express();
 
-// Normalize FRONTEND_URL (strip trailing /api if accidentally set)
+// Normalize FRONTEND_URL
 if (process.env.FRONTEND_URL) {
   const stripped = String(process.env.FRONTEND_URL).replace(/\/api\/?$/, '');
   if (stripped !== process.env.FRONTEND_URL) {
@@ -32,7 +33,6 @@ if (process.env.FRONTEND_URL) {
 // --- 1. ENV VAR HANDLING ---
 const JWT_SECRET = process.env.JWT_SECRET || 'fallback_secret';
 const ADMIN_API_KEY = process.env.ADMIN_API_KEY;
-
 if (process.env.NODE_ENV === 'production' && !ADMIN_API_KEY) {
   console.error('FATAL: ADMIN_API_KEY missing.');
   process.exit(1);
@@ -51,15 +51,9 @@ app.use(helmet({
     },
   },
 }));
-
 if ((process.env.NODE_ENV || 'development') === 'production') {
-  app.use(helmet.hsts({
-    maxAge: 31536000,
-    includeSubDomains: true,
-    preload: true
-  }));
+  app.use(helmet.hsts({ maxAge: 31536000, includeSubDomains: true, preload: true }));
 }
-
 app.use(morgan('combined'));
 
 const allowedOrigins = [
@@ -67,7 +61,6 @@ const allowedOrigins = [
   'http://localhost:5173',
   'http://localhost:3000'
 ].filter(Boolean).map(url => url.replace(/\/$/, ""));
-
 app.use(cors({
   origin: (origin, callback) => {
     if (!origin || allowedOrigins.includes(origin.replace(/\/$/, ""))) {
@@ -84,7 +77,6 @@ app.use(cors({
 app.use(express.json({ limit: '50mb' }));
 app.use(cookieParser());
 app.use('/storage', express.static(path.join(process.cwd(), 'storage')));
-
 ['storage/avatars', 'storage/products'].forEach(dir => {
   const fullPath = path.join(process.cwd(), dir);
   if (!fs.existsSync(fullPath)) fs.mkdirSync(fullPath, { recursive: true });
@@ -93,38 +85,30 @@ app.use('/storage', express.static(path.join(process.cwd(), 'storage')));
 // --- 3. MIDDLEWARE GUARDS ---
 const adminGuard = (req, res, next) => {
   const session = req.cookies.admin_session;
-  if (session && session === ADMIN_API_KEY) {
-    return next();
-  }
+  if (session && session === ADMIN_API_KEY) return next();
   res.status(403).json({ error: 'Admin access denied' });
 };
 
 // --- 4. PUBLIC ROUTES ---
-// Health check endpoint (moved off root)
 app.get('/api/status', (req, res) => {
   res.status(200).json({ status: 'QuickMart API Live', mode: process.env.NODE_ENV });
 });
-
 app.get('/api/products', async (req, res) => {
-  try {
-    const products = await Product.find().sort({ createdAt: -1 });
-    res.json(products);
-  } catch (err) { res.status(500).json({ error: 'Database Error' }); }
+  try { res.json(await Product.find().sort({ createdAt: -1 })); }
+  catch { res.status(500).json({ error: 'Database Error' }); }
 });
-
 app.get('/api/products/:id', async (req, res) => {
   try {
     const product = await Product.findById(req.params.id);
     if (!product) return res.status(404).json({ error: 'Not found' });
     res.json(product);
-  } catch (err) { res.status(500).json({ error: 'Error fetching product' }); }
+  } catch { res.status(500).json({ error: 'Error fetching product' }); }
 });
 
 // --- 5. ADMIN ROUTES ---
 app.post('/api/admin/login', (req, res) => {
   const { key } = req.body;
   if (key !== ADMIN_API_KEY) return res.status(401).json({ error: 'Invalid key' });
-
   res.cookie('admin_session', key, {
     httpOnly: true,
     secure: process.env.NODE_ENV === 'production',
@@ -133,61 +117,39 @@ app.post('/api/admin/login', (req, res) => {
   });
   res.json({ success: true });
 });
-
 app.get('/api/admin/check', (req, res) => {
-  const session = req.cookies.admin_session;
-  res.json({ ok: session === ADMIN_API_KEY });
+  res.json({ ok: req.cookies.admin_session === ADMIN_API_KEY });
 });
-
 app.post('/api/admin/logout', (req, res) => {
   res.clearCookie('admin_session', { secure: process.env.NODE_ENV === 'production', sameSite: 'none' });
   res.json({ success: true });
 });
-
 app.post('/api/admin/products', adminGuard, async (req, res) => {
-  try {
-    const newProduct = new Product(req.body);
-    await newProduct.save();
-    res.status(201).json(newProduct);
-  } catch (err) { res.status(400).json({ error: err.message }); }
+  try { res.status(201).json(await new Product(req.body).save()); }
+  catch (err) { res.status(400).json({ error: err.message }); }
 });
-
 const memoryUpload = multer({ storage: multer.memoryStorage() });
 app.post('/api/admin/products/upload', adminGuard, memoryUpload.array('files', 10), async (req, res) => {
   try {
-    if (!req.files || req.files.length === 0) return res.status(400).json({ error: 'No files uploaded' });
+    if (!req.files?.length) return res.status(400).json({ error: 'No files uploaded' });
     const results = [];
     for (const f of req.files) {
       const filename = `${Date.now()}-${f.originalname.replace(/[^a-zA-Z0-9.\-_]/g, '')}`;
-      try {
-        if (process.env.S3_BUCKET) {
-          const url = await uploadBufferToS3(f.buffer, `products/${filename}`, f.mimetype);
-          results.push({ url });
-        } else {
-          const url = saveBufferToLocal(f.buffer, filename, 'products');
-          results.push({ url });
-        }
-      } catch (err) {
-        console.error('Upload error:', err);
-        return res.status(500).json({ error: 'Upload failed' });
-      }
+      const url = process.env.S3_BUCKET
+        ? await uploadBufferToS3(f.buffer, `products/${filename}`, f.mimetype)
+        : saveBufferToLocal(f.buffer, filename, 'products');
+      results.push({ url });
     }
     res.json({ files: results });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { res.status(500).json({ error: 'Upload failed' }); }
 });
-
 app.put('/api/admin/products/:id', adminGuard, async (req, res) => {
-  try {
-    const updated = await Product.findByIdAndUpdate(req.params.id, req.body, { new: true });
-    res.json(updated);
-  } catch (err) { res.status(400).json({ error: err.message }); }
+  try { res.json(await Product.findByIdAndUpdate(req.params.id, req.body, { new: true })); }
+  catch (err) { res.status(400).json({ error: err.message }); }
 });
-
 app.delete('/api/admin/products/:id', adminGuard, async (req, res) => {
-  try {
-    await Product.findByIdAndDelete(req.params.id);
-    res.json({ success: true });
-  } catch (err) { res.status(500).json({ error: 'Delete failed' }); }
+  try { await Product.findByIdAndDelete(req.params.id); res.json({ success: true }); }
+  catch { res.status(500).json({ error: 'Delete failed' }); }
 });
 
 // --- 6. AUTH ROUTES ---
@@ -195,9 +157,7 @@ app.post('/api/auth/login', async (req, res) => {
   try {
     const { email, password } = req.body;
     const u = await User.findOne({ email: email.toLowerCase() });
-    if (!u || !(await bcrypt.compare(password, u.passwordHash))) {
-      return res.status(401).json({ error: 'Invalid credentials' });
-    }
+    if (!u || !(await bcrypt.compare(password, u.passwordHash))) return res.status(401).json({ error: 'Invalid credentials' });
     const token = jwt.sign({ id: u._id, name: u.name }, JWT_SECRET, { expiresIn: '30d' });
     res.cookie('auth_token', token, {
       httpOnly: true,
@@ -206,19 +166,47 @@ app.post('/api/auth/login', async (req, res) => {
       maxAge: 30 * 24 * 60 * 60 * 1000
     });
     res.json({ success: true, user: { id: u._id, name: u.name, email: u.email } });
-  } catch (err) { res.status(500).json({ error: 'Login failed' }); }
+  } catch { res.status(500).json({ error: 'Login failed' }); }
 });
-
 app.get('/api/auth/me', async (req, res) => {
-  const token = req.cookies.auth_token;
-  if (!token) return res.status(401).json(null);
   try {
-    const decoded = jwt.verify(token, JWT_SECRET);
+    const decoded = jwt.verify(req.cookies.auth_token, JWT_SECRET);
     res.json(decoded);
-  } catch (err) { res.status(401).json(null); }
+  } catch { res.status(401).json(null); }
 });
 
-// --- 7. STATIC FRONTEND SERVING ---
+// --- 7. ORDERS ROUTES ---
+app.post('/api/orders/create', async (req, res) => {
+  try {
+    const order = new Order(req.body);
+    await order.save();
+    res.status(201).json(order);
+  } catch (err) {
+    console.error('Order creation error:', err);
+    res.status(400).json({ error: 'Failed to create order' });
+  }
+});
+
+app.get('/api/orders/:id', async (req, res) => {
+  try {
+    const order = await Order.findOne({ id: req.params.id });
+    if (!order) return res.status(404).json({ error: 'Order not found' });
+    res.json(order);
+  } catch (err) {
+    res.status(500).json({ error: 'Error fetching order' });
+  }
+});
+
+app.get('/api/orders/user/:userId', async (req, res) => {
+  try {
+    const orders = await Order.find({ userId: req.params.userId }).sort({ createdAt: -1 });
+    res.json(orders);
+  } catch (err) {
+    res.status(500).json({ error: 'Error fetching orders' });
+  }
+});
+
+// --- 8. STATIC FRONTEND SERVING ---
 const PORT = process.env.PORT || 5000;
 let distPath = path.join(process.cwd(), 'dist');
 const altDist = path.join(process.cwd(), '..', 'dist');
@@ -242,37 +230,14 @@ if (fs.existsSync(distPath)) {
   console.log('No built frontend found at', distPath, 'or', altDist);
 }
 
-// --- 8. GLOBAL ERROR HANDLER ---
+// --- 9. GLOBAL ERROR HANDLER ---
 app.use((err, req, res, next) => {
   console.error('Unhandled error:', err.stack || err);
   res.status(500).json({ error: 'Internal Server Error' });
 });
 
-// --- 9. START SERVER ---
+// --- 10. START SERVER ---
 app.listen(PORT, () => {
   connectDB();
   console.log(`🚀 Server live on port ${PORT}`);
-});
-// --- 10. ORDERS ROUTES ---
-import Order from './models/Order.js'; // make sure you have an Order model
-
-app.post('/api/orders/create', async (req, res) => {
-  try {
-    const order = new Order(req.body);
-    await order.save();
-    res.status(201).json(order);
-  } catch (err) {
-    console.error('Order creation error:', err);
-    res.status(400).json({ error: 'Failed to create order' });
-  }
-});
-
-app.get('/api/orders/:id', async (req, res) => {
-  try {
-    const order = await Order.findById(req.params.id);
-    if (!order) return res.status(404).json({ error: 'Order not found' });
-    res.json(order);
-  } catch (err) {
-    res.status(500).json({ error: 'Error fetching order' });
-  }
 });
