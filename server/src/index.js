@@ -52,7 +52,6 @@ app.use(helmet({
   },
 }));
 
-// Enforce HSTS in production
 if ((process.env.NODE_ENV || 'development') === 'production') {
   app.use(helmet.hsts({
     maxAge: 31536000,
@@ -61,7 +60,6 @@ if ((process.env.NODE_ENV || 'development') === 'production') {
   }));
 }
 
-// Logging
 app.use(morgan('combined'));
 
 const allowedOrigins = [
@@ -87,7 +85,6 @@ app.use(express.json({ limit: '50mb' }));
 app.use(cookieParser());
 app.use('/storage', express.static(path.join(process.cwd(), 'storage')));
 
-// Ensure directories exist
 ['storage/avatars', 'storage/products'].forEach(dir => {
   const fullPath = path.join(process.cwd(), dir);
   if (!fs.existsSync(fullPath)) fs.mkdirSync(fullPath, { recursive: true });
@@ -103,7 +100,8 @@ const adminGuard = (req, res, next) => {
 };
 
 // --- 4. PUBLIC ROUTES ---
-app.get('/', (req, res) => {
+// Health check endpoint (moved off root)
+app.get('/api/status', (req, res) => {
   res.status(200).json({ status: 'QuickMart API Live', mode: process.env.NODE_ENV });
 });
 
@@ -225,7 +223,6 @@ const PORT = process.env.PORT || 5000;
 let distPath = path.join(process.cwd(), 'dist');
 const altDist = path.join(process.cwd(), '..', 'dist');
 
-// Fallback if dist is not in current working directory
 if (!fs.existsSync(distPath) && fs.existsSync(altDist)) {
   distPath = altDist;
 }
