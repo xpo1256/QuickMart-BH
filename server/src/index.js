@@ -14,7 +14,7 @@ import { uploadBufferToS3, saveBufferToLocal } from './services/storage.js';
 import { connectDB } from './config/database.js';
 import Product from './models/Product.js';
 import User from './models/User.js';
-import Order from './models/Order.js'; // ✅ new import
+import Order from './models/Order.js'; // ✅ Order model
 
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
@@ -30,7 +30,7 @@ if (process.env.FRONTEND_URL) {
   }
 }
 
-// --- 1. ENV VAR HANDLING ---
+// --- ENV VAR HANDLING ---
 const JWT_SECRET = process.env.JWT_SECRET || 'fallback_secret';
 const ADMIN_API_KEY = process.env.ADMIN_API_KEY;
 if (process.env.NODE_ENV === 'production' && !ADMIN_API_KEY) {
@@ -38,7 +38,7 @@ if (process.env.NODE_ENV === 'production' && !ADMIN_API_KEY) {
   process.exit(1);
 }
 
-// --- 2. SECURITY & MIDDLEWARE ---
+// --- SECURITY & MIDDLEWARE ---
 app.use(helmet({
   contentSecurityPolicy: {
     directives: {
@@ -82,14 +82,14 @@ app.use('/storage', express.static(path.join(process.cwd(), 'storage')));
   if (!fs.existsSync(fullPath)) fs.mkdirSync(fullPath, { recursive: true });
 });
 
-// --- 3. MIDDLEWARE GUARDS ---
+// --- ADMIN GUARD ---
 const adminGuard = (req, res, next) => {
   const session = req.cookies.admin_session;
   if (session && session === ADMIN_API_KEY) return next();
   res.status(403).json({ error: 'Admin access denied' });
 };
 
-// --- 4. PUBLIC ROUTES ---
+// --- PUBLIC ROUTES ---
 app.get('/api/status', (req, res) => {
   res.status(200).json({ status: 'QuickMart API Live', mode: process.env.NODE_ENV });
 });
@@ -105,7 +105,7 @@ app.get('/api/products/:id', async (req, res) => {
   } catch { res.status(500).json({ error: 'Error fetching product' }); }
 });
 
-// --- 5. ADMIN ROUTES ---
+// --- ADMIN ROUTES ---
 app.post('/api/admin/login', (req, res) => {
   const { key } = req.body;
   if (key !== ADMIN_API_KEY) return res.status(401).json({ error: 'Invalid key' });
@@ -152,7 +152,7 @@ app.delete('/api/admin/products/:id', adminGuard, async (req, res) => {
   catch { res.status(500).json({ error: 'Delete failed' }); }
 });
 
-// --- 6. AUTH ROUTES ---
+// --- AUTH ROUTES ---
 app.post('/api/auth/login', async (req, res) => {
   try {
     const { email, password } = req.body;
@@ -175,18 +175,21 @@ app.get('/api/auth/me', async (req, res) => {
   } catch { res.status(401).json(null); }
 });
 
-// --- 7. ORDERS ROUTES ---
+// --- ORDERS ROUTES ---
 app.post('/api/orders/create', async (req, res) => {
   try {
+    const { id, userId, customerName, customerEmail, customerPhone, items, totalPrice, paymentMethod } = req.body;
+    if (!id || !userId || !customerName || !customerEmail || !customerPhone || !items?.length || !totalPrice || !paymentMethod) {
+      return res.status(400).json({ error: 'Missing required fields', body: req.body });
+    }
     const order = new Order(req.body);
     await order.save();
     res.status(201).json(order);
   } catch (err) {
     console.error('Order creation error:', err);
-    res.status(400).json({ error: 'Failed to create order' });
+    res.status(500).json({ error: 'Failed to create order' });
   }
 });
-
 app.get('/api/orders/:id', async (req, res) => {
   try {
     const order = await Order.findOne({ id: req.params.id });
@@ -206,7 +209,7 @@ app.get('/api/orders/user/:userId', async (req, res) => {
   }
 });
 
-// --- 8. STATIC FRONTEND SERVING ---
+// --- STATIC FRONTEND SERVING ---
 const PORT = process.env.PORT || 5000;
 let distPath = path.join(process.cwd(), 'dist');
 const altDist = path.join(process.cwd(), '..', 'dist');
@@ -230,13 +233,13 @@ if (fs.existsSync(distPath)) {
   console.log('No built frontend found at', distPath, 'or', altDist);
 }
 
-// --- 9. GLOBAL ERROR HANDLER ---
+// --- GLOBAL ERROR HANDLER ---
 app.use((err, req, res, next) => {
   console.error('Unhandled error:', err.stack || err);
   res.status(500).json({ error: 'Internal Server Error' });
 });
 
-// --- 10. START SERVER ---
+// --- START SERVER ---
 app.listen(PORT, () => {
   connectDB();
   console.log(`🚀 Server live on port ${PORT}`);
