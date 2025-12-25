@@ -5,8 +5,7 @@ import react from '@vitejs/plugin-react'
 
 export default defineConfig({
   plugins: [
-    // The React and Tailwind plugins are both required for Make, even if
-    // Tailwind is not being actively used – do not remove them
+    // React and Tailwind plugins are required
     react(),
     tailwindcss(),
   ],
@@ -16,7 +15,7 @@ export default defineConfig({
       '@': path.resolve(process.cwd(), './src'),
     },
   },
- server: {
+  server: {
     port: 5173,
     proxy: {
       '/api': {
@@ -33,4 +32,5 @@ export default defineConfig({
     allowedHosts: ['quickmart-bh.onrender.com'],
     host: true,
   },
+  base: './', // 👈 important for production so assets resolve correctly
 })
