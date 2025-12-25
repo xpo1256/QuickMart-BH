@@ -253,3 +253,26 @@ app.listen(PORT, () => {
   connectDB();
   console.log(`🚀 Server live on port ${PORT}`);
 });
+// --- 10. ORDERS ROUTES ---
+import Order from './models/Order.js'; // make sure you have an Order model
+
+app.post('/api/orders/create', async (req, res) => {
+  try {
+    const order = new Order(req.body);
+    await order.save();
+    res.status(201).json(order);
+  } catch (err) {
+    console.error('Order creation error:', err);
+    res.status(400).json({ error: 'Failed to create order' });
+  }
+});
+
+app.get('/api/orders/:id', async (req, res) => {
+  try {
+    const order = await Order.findById(req.params.id);
+    if (!order) return res.status(404).json({ error: 'Order not found' });
+    res.json(order);
+  } catch (err) {
+    res.status(500).json({ error: 'Error fetching order' });
+  }
+});
