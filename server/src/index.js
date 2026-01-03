@@ -9,6 +9,8 @@ import path from 'path';
 import mongoose from 'mongoose';
 import multer from 'multer';
 import { uploadBufferToS3, saveBufferToLocal } from './services/storage.js';
+import { v4 as uuidv4 } from 'uuid';
+import paypal from '@paypal/checkout-server-sdk';
 
 // Import MongoDB connection and models
 import { connectDB } from './config/database.js';
@@ -178,16 +180,132 @@ app.get('/api/auth/me', async (req, res) => {
 // --- ORDERS ROUTES ---
 app.post('/api/orders/create', async (req, res) => {
   try {
-    const { id, userId, customerName, customerEmail, customerPhone, items, totalPrice, paymentMethod } = req.body;
-    if (!id || !userId || !customerName || !customerEmail || !customerPhone || !items?.length || !totalPrice || !paymentMethod) {
-      return res.status(400).json({ error: 'Missing required fields', body: req.body });
+    const body = req.body || {};
+    // ensure order id
+    const id = body.id || `ORD-${uuidv4()}`;
+    // ensure userId: prefer body, fallback to authenticated token, else guest
+    let userId = body.userId;
+    if (!userId) {
+      try {
+        const decoded = req.cookies && req.cookies.auth_token ? jwt.verify(req.cookies.auth_token, JWT_SECRET) : null;
+        userId = decoded && decoded.id ? decoded.id : `guest-${uuidv4()}`;
+      } catch (e) {
+        userId = `guest-${uuidv4()}`;
+      }
     }
-    const order = new Order(req.body);
+
+    const customerName = body.customerName;
+    const customerEmail = body.customerEmail;
+    const customerPhone = body.customerPhone;
+    const items = Array.isArray(body.items) ? body.items : [];
+    const totalPrice = Number(body.totalPrice || 0);
+    const paymentMethod = body.paymentMethod;
+
+    if (!customerName || !customerEmail || !customerPhone || !items.length || !totalPrice || !paymentMethod) {
+      return res.status(400).json({ error: 'Missing required fields', body });
+    }
+
+    // Map frontend `deliveryAddress` (string) to `customerAddress` object used by schema
+    const customerAddress = typeof body.deliveryAddress === 'string'
+      ? { street: body.deliveryAddress }
+      : (body.customerAddress || {});
+
+    const order = new Order({
+      id,
+      userId,
+      customerName,
+      customerEmail,
+      customerPhone,
+      customerAddress,
+      items,
+      totalPrice,
+      paymentMethod,
+      paymentStatus: 'pending',
+    });
     await order.save();
-    res.status(201).json(order);
+    res.status(201).json({ success: true, orderId: order.id, order });
   } catch (err) {
     console.error('Order creation error:', err);
     res.status(500).json({ error: 'Failed to create order' });
+  }
+});
+
+// --- PayPal payments (endpoint used by frontend) ---
+// Initialize PayPal client if credentials are present
+let paypalClient = null;
+try {
+  const clientId = process.env.PAYPAL_CLIENT_ID;
+  const clientSecret = process.env.PAYPAL_CLIENT_SECRET;
+  const mode = process.env.PAYPAL_MODE || 'sandbox';
+  if (clientId && clientSecret) {
+    const environment = (mode === 'live' || mode === 'production')
+      ? new paypal.core.LiveEnvironment(clientId, clientSecret)
+      : new paypal.core.SandboxEnvironment(clientId, clientSecret);
+    paypalClient = new paypal.core.PayPalHttpClient(environment);
+    console.log(`✓ PayPal initialized in ${mode} mode`);
+  } else {
+    console.warn('PayPal not configured (missing client id/secret)');
+  }
+} catch (e) {
+  console.error('PayPal init error', e && e.message);
+}
+
+const convertBHDToUSD = (amountBHD) => {
+  const rate = parseFloat(process.env.PAYPAL_BHD_TO_USD_RATE || '2.65957');
+  return (amountBHD / rate).toFixed(2);
+};
+
+app.post('/api/payments/paypal/create', async (req, res) => {
+  try {
+    if (!paypalClient) {
+      return res.status(503).json({ error: 'PayPal not configured', message: 'PayPal credentials missing on server' });
+    }
+
+    const { items, totalPrice, currency = 'BHD' } = req.body || {};
+    if (!items || !Array.isArray(items) || items.length === 0) {
+      return res.status(400).json({ error: 'Invalid order data', message: 'Items array is required' });
+    }
+    if (!totalPrice || Number(totalPrice) <= 0) {
+      return res.status(400).json({ error: 'Invalid total price' });
+    }
+
+    const amountUSD = currency === 'BHD' ? convertBHDToUSD(Number(totalPrice)) : Number(totalPrice).toFixed(2);
+
+    const request = new paypal.orders.OrdersCreateRequest();
+    request.prefer('return=representation');
+    request.requestBody({
+      intent: 'CAPTURE',
+      application_context: {
+        brand_name: 'QuickMart Bahrain',
+        landing_page: 'NO_PREFERENCE',
+        user_action: 'PAY_NOW',
+        return_url: `${process.env.FRONTEND_URL || 'http://localhost:5173'}/payment-success`,
+        cancel_url: `${process.env.FRONTEND_URL || 'http://localhost:5173'}/payment-cancel`
+      },
+      purchase_units: [{
+        reference_id: `ORDER_${Date.now()}`,
+        description: 'QuickMart Order',
+        amount: {
+          currency_code: 'USD',
+          value: String(amountUSD)
+        },
+        items: items.slice(0, 20).map(item => ({
+          name: (item.name || 'Product').substring(0, 127),
+          unit_amount: { currency_code: 'USD', value: String(currency === 'BHD' ? convertBHDToUSD(item.price || 0) : (item.price || 0).toFixed(2)) },
+          quantity: String(item.quantity || 1)
+        }))
+      }]
+    });
+
+    const response = await paypalClient.execute(request);
+    const links = response.result && response.result.links ? response.result.links : [];
+    const approve = links.find(l => l.rel === 'approve') || links.find(l => l.rel === 'payer-action');
+    const paymentUrl = approve ? approve.href : (links[0] && links[0].href) || null;
+
+    res.json({ success: true, paymentUrl, raw: response.result });
+  } catch (err) {
+    console.error('PayPal create error:', err && (err.message || err));
+    res.status(500).json({ error: 'Failed to create PayPal payment', message: err && err.message });
   }
 });
 app.get('/api/orders/:id', async (req, res) => {
