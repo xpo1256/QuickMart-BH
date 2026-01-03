@@ -257,16 +257,34 @@ const convertBHDToUSD = (amountBHD) => {
 
 app.post('/api/payments/paypal/create', async (req, res) => {
   try {
+    const body = req.body || {};
+
+    // PayPal must be configured for real payments
     if (!paypalClient) {
       return res.status(503).json({ error: 'PayPal not configured', message: 'PayPal credentials missing on server' });
     }
 
-    const { items, totalPrice, currency = 'BHD' } = req.body || {};
-    if (!items || !Array.isArray(items) || items.length === 0) {
-      return res.status(400).json({ error: 'Invalid order data', message: 'Items array is required' });
+    // Accept either explicit items or an existing orderId (frontend sometimes sends orderId)
+    let { items, totalPrice, currency = 'BHD', orderId } = body;
+
+    if ((!items || !Array.isArray(items) || items.length === 0) && orderId) {
+      try {
+        const existing = await Order.findOne({ id: orderId });
+        if (existing) {
+          items = existing.items || [];
+          totalPrice = existing.totalPrice;
+        }
+      } catch (e) {
+        console.error('Error loading order by id for PayPal create:', e && e.message);
+      }
     }
+
+    if (!items || !Array.isArray(items) || items.length === 0) {
+      return res.status(400).json({ error: 'Invalid order data', message: 'Items array is required and was not provided' });
+    }
+
     if (!totalPrice || Number(totalPrice) <= 0) {
-      return res.status(400).json({ error: 'Invalid total price' });
+      return res.status(400).json({ error: 'Invalid total price', message: 'Total price must be greater than 0' });
     }
 
     const amountUSD = currency === 'BHD' ? convertBHDToUSD(Number(totalPrice)) : Number(totalPrice).toFixed(2);
@@ -284,6 +302,7 @@ app.post('/api/payments/paypal/create', async (req, res) => {
       },
       purchase_units: [{
         reference_id: `ORDER_${Date.now()}`,
+        custom_id: orderId || undefined,
         description: 'QuickMart Order',
         amount: {
           currency_code: 'USD',
@@ -306,6 +325,52 @@ app.post('/api/payments/paypal/create', async (req, res) => {
   } catch (err) {
     console.error('PayPal create error:', err && (err.message || err));
     res.status(500).json({ error: 'Failed to create PayPal payment', message: err && err.message });
+  }
+});
+
+// Verify / capture PayPal payment and update internal order
+app.post('/api/payments/paypal/verify', async (req, res) => {
+  try {
+    if (!paypalClient) return res.status(503).json({ error: 'PayPal not configured' });
+
+    const { orderId, paymentId, payerId } = req.body || {};
+    const paypalOrderId = paymentId || orderId;
+    if (!paypalOrderId) return res.status(400).json({ error: 'Missing PayPal order id/paymentId' });
+
+    // Attempt to capture the PayPal order
+    try {
+      const request = new paypal.orders.OrdersCaptureRequest(paypalOrderId);
+      request.requestBody({});
+      const capture = await paypalClient.execute(request);
+
+      if (capture.result && capture.result.status && capture.result.status === 'COMPLETED') {
+        // update internal order if orderId refers to our internal id
+        if (orderId) {
+          try {
+            const existing = await Order.findOne({ id: orderId });
+            if (existing) {
+              existing.paymentStatus = 'completed';
+              existing.paymentId = capture.result.id || paypalOrderId;
+              existing.paymentProvider = 'paypal';
+              existing.orderStatus = 'confirmed';
+              await existing.save();
+            }
+          } catch (e) {
+            console.error('Failed to update local order after PayPal capture', e && e.message);
+          }
+        }
+
+        return res.json({ success: true, capture: capture.result });
+      }
+
+      return res.status(400).json({ error: 'Payment not completed', status: capture.result.status, details: capture.result });
+    } catch (captureErr) {
+      console.error('PayPal capture error:', captureErr && (captureErr.message || captureErr));
+      return res.status(500).json({ error: 'Failed to capture PayPal payment', message: captureErr && captureErr.message });
+    }
+  } catch (err) {
+    console.error('PayPal verify endpoint error:', err && err.message);
+    res.status(500).json({ error: 'Internal error' });
   }
 });
 app.get('/api/orders/:id', async (req, res) => {
